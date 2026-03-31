@@ -72,76 +72,142 @@ class DashboardController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $request->validate([
-            'start_date' => ['nullable', 'date'],
-            'end_date'   => ['nullable', 'date'],
-            'keyword'    => ['nullable', 'string', 'max:255'],
-            'platform'   => ['nullable', 'string'],
-            'region'     => ['nullable', 'string', 'max:255'],
-            'page'       => ['nullable', 'integer', 'min:1'],
-            'per_page'   => ['nullable', 'integer', 'min:1', 'max:100'],
-        ]);
+        $startDate        = $request->query('start_date');
+        $endDate          = $request->query('end_date');
+        $keyword          = $request->query('keyword');
+        $platformFilter   = $request->query('platform');
+        $regionFilter     = $request->query('region');
 
-        $service = new DashboardDataService();
+        $table = $this->getDummyTable();
 
-        // All data for available filter options
-        $allData         = $service->getFilteredData([]);
-        $availableFilters = $service->getAvailableFilters($allData);
+        // Apply filters
+        $filtered = array_filter($table, function ($row) use ($startDate, $endDate, $keyword, $platformFilter, $regionFilter) {
+            if ($startDate && $row['date'] < $startDate) return false;
+            if ($endDate   && $row['date'] > $endDate)   return false;
+            if ($keyword   && stripos($row['content'], $keyword) === false) return false;
+            if ($platformFilter && $row['platform'] !== $platformFilter) return false;
+            if ($regionFilter   && $row['region']   !== $regionFilter)   return false;
+            return true;
+        });
 
-        // Filtered data based on request params
-        $filteredData = $service->getFilteredData(
-            $request->only(['start_date', 'end_date', 'keyword', 'platform', 'region'])
+        $filtered = array_values($filtered);
+
+        // Dynamic options
+        $allPlatforms = array_values(array_unique(array_column($table, 'platform')));
+        $allRegions   = array_values(array_unique(array_column($table, 'region')));
+        sort($allPlatforms);
+        sort($allRegions);
+
+        // Mention by platform from filtered
+        $platformCounts = [];
+        foreach ($filtered as $row) {
+            $p = $row['platform'];
+            $platformCounts[$p] = ($platformCounts[$p] ?? 0) + 1;
+        }
+        arsort($platformCounts);
+        $total = array_sum($platformCounts) ?: 1;
+        $mentionByPlatform = array_map(fn($p, $c) => [
+            'platform'   => $p,
+            'count'      => $c,
+            'percentage' => round($c / $total * 100),
+        ], array_keys($platformCounts), $platformCounts);
+
+        // Mention by province from filtered
+        $provinceCounts = [];
+        foreach ($filtered as $row) {
+            $r = $row['region'];
+            $provinceCounts[$r] = ($provinceCounts[$r] ?? 0) + 1;
+        }
+        arsort($provinceCounts);
+        $mentionByProvince = array_map(
+            fn($n, $v) => ['name' => $n, 'value' => $v],
+            array_keys($provinceCounts),
+            $provinceCounts
         );
 
-        $stats = $service->getStatistics($filteredData);
+        // Engagement from filtered (sum per platform)
+        $engMap = [];
+        foreach ($filtered as $row) {
+            $p = $row['platform'];
+            if (!isset($engMap[$p])) {
+                $engMap[$p] = ['platform' => $p, 'post' => 0, 'like' => 0, 'comment' => 0, 'share' => 0];
+            }
+            $engMap[$p]['post']++;
+            $engMap[$p]['like']    += $row['like'];
+            $engMap[$p]['comment'] += $row['comment'];
+            $engMap[$p]['share']   += $row['share'];
+        }
+        $engagement = array_values($engMap);
 
-        // Pagination
-        $page    = (int) $request->input('page', 1);
-        $perPage = (int) $request->input('per_page', 20);
-        $total   = count($filteredData);
-        $pages   = $total > 0 ? (int) ceil($total / $perPage) : 1;
-        $offset  = ($page - 1) * $perPage;
-        $slice   = array_slice($filteredData, $offset, $perPage);
-
-        // Table rows
-        $table = array_map(fn ($r) => [
-            'id'        => $r['id'],
-            'platform'  => $r['platform'],
-            'author'    => $r['author'],
-            'text'      => $r['text'],
-            'sentiment' => $r['sentiment'],
-            'region'    => $r['region'],
-            'likes'     => $r['likes'],
-            'comments'  => $r['comments'],
-            'shares'    => $r['shares'],
-            'views'     => $r['views'],
-            'date'      => $r['date'],
-            'url'       => $r['url'],
-        ], $slice);
+        // Mention by media (static for demo)
+        $mentionByMedia = [
+            ['media' => 'Detik.com',    'count' => 88],
+            ['media' => 'Kompas.com',   'count' => 72],
+            ['media' => 'CNNIndonesia', 'count' => 65],
+            ['media' => 'Okezone',      'count' => 58],
+            ['media' => 'Republika',    'count' => 51],
+            ['media' => 'Bisnis',       'count' => 46],
+            ['media' => 'Tempo',        'count' => 38],
+        ];
 
         return response()->json([
             'filters' => [
-                'applied'   => array_filter($request->only(['start_date', 'end_date', 'keyword', 'platform', 'region'])),
-                'platforms' => $availableFilters['platforms'],
-                'regions'   => $availableFilters['regions'],
+                'platforms' => $allPlatforms,
+                'regions'   => $allRegions,
             ],
-            'net_sentiment'        => $stats['net_sentiment'],
-            'sentiment_percentage' => $stats['sentiment_percentage'],
-            'trend'                => $stats['trend'],
-            'platform_sentiment'   => $stats['platform_sentiment'],
-            'mention_by_platform'  => $stats['mention_by_platform'],
-            'mention_by_province'  => $stats['mention_by_province'],
-            'top_topics'           => $stats['top_topics'],
-            'engagement'           => $stats['engagement'],
-            'negative_words'       => $stats['negative_words'],
-            'positive_words'       => $stats['positive_words'],
-            'table'                => $table,
-            'meta'                 => [
-                'total'    => $total,
-                'page'     => $page,
-                'per_page' => $perPage,
-                'pages'    => $pages,
+            'net_sentiment' => 10.51,
+            'sentiment_percentage' => [
+                'positive' => 55,
+                'neutral'  => 35,
+                'negative' => 10,
             ],
+            'negative_words' => [
+                ['text' => 'kendala nya',    'size' => 5],
+                ['text' => 'Total Kerugian', 'size' => 4],
+                ['text' => 'Word persiapan', 'size' => 3],
+                ['text' => 'tidak tertib',   'size' => 3],
+                ['text' => 'Latih fokus',    'size' => 2],
+                ['text' => 'pemipaan dk',    'size' => 2],
+                ['text' => 'masalah besar',  'size' => 2],
+                ['text' => 'buruk sekali',   'size' => 1],
+            ],
+            'positive_words' => [
+                ['text' => 'mohon info',      'size' => 5],
+                ['text' => 'akan segera',     'size' => 4],
+                ['text' => 'proses langsung', 'size' => 4],
+                ['text' => 'layanan cepat',   'size' => 3],
+                ['text' => 'untuk layanan',   'size' => 3],
+                ['text' => 'pengelolaan',     'size' => 2],
+                ['text' => 'sukses bro',      'size' => 2],
+                ['text' => 'sangat bagus',    'size' => 1],
+            ],
+            'trend' => [
+                ['month' => 'Jan', 'instagram' => 5,  'online_news' => 8],
+                ['month' => 'Feb', 'instagram' => 7,  'online_news' => 9],
+                ['month' => 'Mar', 'instagram' => 6,  'online_news' => 10],
+                ['month' => 'Apr', 'instagram' => 8,  'online_news' => 7],
+                ['month' => 'May', 'instagram' => 6,  'online_news' => 8],
+                ['month' => 'Jun', 'instagram' => 9,  'online_news' => 7],
+                ['month' => 'Jul', 'instagram' => 7,  'online_news' => 9],
+                ['month' => 'Aug', 'instagram' => 5,  'online_news' => 10],
+                ['month' => 'Sep', 'instagram' => 6,  'online_news' => 8],
+                ['month' => 'Oct', 'instagram' => 8,  'online_news' => 7],
+                ['month' => 'Nov', 'instagram' => 7,  'online_news' => 6],
+                ['month' => 'Dec', 'instagram' => 5,  'online_news' => 8],
+            ],
+            'platform_sentiment' => [
+                ['platform' => 'Facebook',    'positive' => 45, 'neutral' => 30, 'negative' => 25],
+                ['platform' => 'Instagram',   'positive' => 40, 'neutral' => 30, 'negative' => 30],
+                ['platform' => 'Online News', 'positive' => 35, 'neutral' => 39, 'negative' => 26],
+                ['platform' => 'TikTok',      'positive' => 45, 'neutral' => 23, 'negative' => 32],
+                ['platform' => 'X (Twitter)', 'positive' => 44, 'neutral' => 26, 'negative' => 30],
+            ],
+            'mention_by_platform' => array_values($mentionByPlatform),
+            'mention_by_media'    => $mentionByMedia,
+            'mention_by_province' => array_values($mentionByProvince),
+            'top_topics'          => ['Analytics', 'Monitoring', 'Social Media', 'Development', 'Digitalize'],
+            'engagement'          => $engagement,
+            'table'               => $filtered,
         ]);
     }
 }
