@@ -11,8 +11,7 @@ services:
     networks:
       - apify_net
     depends_on:
-      # - postgres
-      - mysql
+      - postgres
 
   nginx:
     image: nginx:alpine
@@ -28,36 +27,21 @@ services:
     depends_on:
       - app
 
-  # postgres:
-  #   image: postgres:16-alpine
-  #   container_name: apify_postgres
-  #   restart: unless-stopped
-  #   ports:
-  #     - '5433:5432'
-  #   environment:
-  #     POSTGRES_DB: default
-  #     POSTGRES_USER: default
-  #     POSTGRES_PASSWORD: secret
-  #   volumes:
-  #     - ./.docker/postgres/data:/var/lib/postgresql/data
-  #   networks:
-  #     - apify_net
-
-  mysql:
-    image: mysql:8.0
-    container_name: apify_mysql
+  postgres:
+    image: postgres:16-alpine
+    container_name: apify_postgres
     restart: unless-stopped
     ports:
-      - '3307:3306'
+      - '5437:5432'
     environment:
-      MYSQL_DATABASE: default
-      MYSQL_USER: default
-      MYSQL_PASSWORD: secret
-      MYSQL_ROOT_PASSWORD: rootsecret
+      POSTGRES_DB: default
+      POSTGRES_USER: default
+      POSTGRES_PASSWORD: secret
     volumes:
-      - ./.docker/mysql/data:/var/lib/mysql
+      - ./.docker/postgres/data:/var/lib/postgresql/data
     networks:
       - apify_net
+
 
 networks:
   apify_net:
